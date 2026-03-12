@@ -1,0 +1,610 @@
+{
+ "cells": [
+  {
+   "cell_type": "markdown",
+   "metadata": {},
+   "source": [
+    "## Rasterio Workflow: STAC, COGs, NDVI, and Time Series 🛰️🌿📈\n",
+    "\n",
+    "In this notebook, you'll work through a complete remote sensing workflow step by step. This is where you search for Sentinel-2 imagery with STAC, read raster subsets from cloud-hosted imagery, calculate NDVI, mask raster values by polygons, and build a simple NDVI time series.\n",
+    "\n",
+    "### 🎯 What This Notebook Does\n",
+    "- Search Sentinel-2 imagery using a STAC catalog\n",
+    "- Inspect STAC items and scene assets\n",
+    "- Read raster windows from cloud-hosted imagery\n",
+    "- Calculate NDVI from red and NIR bands\n",
+    "- Mask NDVI by polygon features\n",
+    "- Build and visualize an NDVI time series\n",
+    "\n",
+    "### 🔧 Helper Functions Used in This Notebook\n",
+    "```python\n",
+    "def image_search(bbox, date_range, scene_cloud_tolerance):\n",
+    "    ...\n",
+    "\n",
+    "def windowed_read(url, bbox):\n",
+    "    ...\n",
+    "\n",
+    "def mask_ndvi_by_field(image, field_geom):\n",
+    "    ...\n",
+    "```\n",
+    "\n",
+    "### 📍 Where This Work Goes:\n",
+    "**Target File**: `src/rasterio_basics.py`  \n",
+    "**Workflow Type**: Script with helper functions and step-by-step code  \n",
+    "**Use This Notebook To**: Learn the workflow, test the helper functions, and build the final script\n",
+    "\n",
+    "---"
+   ]
+  },
+  {
+   "cell_type": "markdown",
+   "metadata": {},
+   "source": [
+    "### 📚 Step 1: Import Libraries\n",
+    "\n",
+    "Let's import the libraries needed for searching imagery, reading rasters, calculating NDVI, and working with polygon data."
+   ]
+  },
+  {
+   "cell_type": "code",
+   "execution_count": null,
+   "metadata": {},
+   "outputs": [],
+   "source": [
+    "import matplotlib.pyplot as plt\n",
+    "import numpy as np\n",
+    "import numpy.ma as ma\n",
+    "import geopandas as gpd\n",
+    "import rasterio\n",
+    "from rasterio import features\n",
+    "from rasterio.plot import show\n",
+    "from pyproj import Transformer\n",
+    "from pystac_client import Client\n",
+    "import planetary_computer\n",
+    "import matplotlib.dates as mdates\n",
+    "from datetime import datetime\n",
+    "\n",
+    "stac_url = \"https://planetarycomputer.microsoft.com/api/stac/v1\"\n",
+    "\n",
+    "print(\"✅ Libraries imported\")\n",
+    "print(f\"✅ STAC URL: {stac_url}\")"
+   ]
+  },
+  {
+   "cell_type": "markdown",
+   "metadata": {},
+   "source": [
+    "### 🌍 Step 2: Define the Search Area and Date Range\n",
+    "\n",
+    "We need a bounding box and a date range before searching for imagery."
+   ]
+  },
+  {
+   "cell_type": "code",
+   "execution_count": null,
+   "metadata": {},
+   "outputs": [],
+   "source": [
+    "# Bounding box: [west, south, east, north]\n",
+    "bbox = [-110.74772571639987, 32.270431012618026, -110.70996215904789, 32.29386169894274]\n",
+    "\n",
+    "# Short date range for initial exploration\n",
+    "date_range = \"2021-07-05/2021-08-02\"\n",
+    "\n",
+    "print(f\"Bounding box: {bbox}\")\n",
+    "print(f\"Date range: {date_range}\")"
+   ]
+  },
+  {
+   "cell_type": "markdown",
+   "metadata": {},
+   "source": [
+    "### 🔎 Step 3: Build a Helper Function to Search STAC\n",
+    "\n",
+    "**💡 This helper function will also be useful in `src/rasterio_basics.py`!**"
+   ]
+  },
+  {
+   "cell_type": "code",
+   "execution_count": null,
+   "metadata": {},
+   "outputs": [],
+   "source": [
+    "def image_search(bbox, date_range, scene_cloud_tolerance):\n",
+    "    \"\"\"\n",
+    "    Search for Sentinel-2 scenes using a STAC catalog.\n",
+    "    \n",
+    "    Args:\n",
+    "        bbox: [west, south, east, north]\n",
+    "        date_range: Date range in \"YYYY-MM-DD/YYYY-MM-DD\" format\n",
+    "        scene_cloud_tolerance: Maximum allowed cloud cover percentage\n",
+    "        \n",
+    "    Returns:\n",
+    "        List of matching STAC items\n",
+    "    \"\"\"\n",
+    "    catalog = Client.open(stac_url)\n",
+    "    \n",
+    "    search = catalog.search(\n",
+    "        collections=[\"sentinel-2-l2a\"],\n",
+    "        bbox=bbox,\n",
+    "        datetime=date_range,\n",
+    "        query={\"eo:cloud_cover\": {\"lt\": scene_cloud_tolerance}}\n",
+    "    )\n",
+    "    \n",
+    "    return list(search.items())\n",
+    "\n",
+    "print(\"✅ Helper function created: image_search()\")"
+   ]
+  },
+  {
+   "cell_type": "markdown",
+   "metadata": {},
+   "source": [
+    "### 🛰️ Step 4: Search for Imagery\n",
+    "\n",
+    "Now let's use our helper function to find matching Sentinel-2 scenes."
+   ]
+  },
+  {
+   "cell_type": "code",
+   "execution_count": null,
+   "metadata": {},
+   "outputs": [],
+   "source": [
+    "items = image_search(bbox, date_range, 5)\n",
+    "\n",
+    "print(f\"✅ Found {len(items)} scenes\")\n",
+    "for item in items:\n",
+    "    print(f\"   - {item.id} on {item.datetime}\")"
+   ]
+  },
+  {
+   "cell_type": "markdown",
+   "metadata": {},
+   "source": [
+    "### 🗂️ Step 5: Inspect One STAC Item and Its Assets\n",
+    "\n",
+    "Each STAC item contains metadata and asset URLs for the scene."
+   ]
+  },
+  {
+   "cell_type": "code",
+   "execution_count": null,
+   "metadata": {},
+   "outputs": [],
+   "source": [
+    "item = items[0]\n",
+    "\n",
+    "print(f\"Item ID: {item.id}\")\n",
+    "print(f\"Datetime: {item.datetime}\")\n",
+    "print(f\"Bounding box: {item.bbox}\")\n",
+    "print(f\"Cloud cover: {item.properties.get('eo:cloud_cover', 'N/A')}%\")\n",
+    "print()\n",
+    "print(\"Available assets:\")\n",
+    "print(list(item.assets.keys()))\n",
+    "print()\n",
+    "print(\"Visual asset:\")\n",
+    "print(item.assets['visual'])"
+   ]
+  },
+  {
+   "cell_type": "markdown",
+   "metadata": {},
+   "source": [
+    "### 🪟 Step 6: Build a Helper Function for Windowed Reads\n",
+    "\n",
+    "**💡 This helper function will also be useful in `src/rasterio_basics.py`!**"
+   ]
+  },
+  {
+   "cell_type": "code",
+   "execution_count": null,
+   "metadata": {},
+   "outputs": [],
+   "source": [
+    "def windowed_read(url, bbox):\n",
+    "    \"\"\"\n",
+    "    Read a raster subset from a cloud-hosted asset.\n",
+    "    \n",
+    "    Args:\n",
+    "        url: Raster asset URL\n",
+    "        bbox: [west, south, east, north]\n",
+    "        \n",
+    "    Returns:\n",
+    "        Tuple of (pixels, transform)\n",
+    "    \"\"\"\n",
+    "    signed_url = planetary_computer.sign(url)\n",
+    "    \n",
+    "    with rasterio.open(signed_url) as src:\n",
+    "        transformer = Transformer.from_crs(\"EPSG:4326\", src.crs, always_xy=True)\n",
+    "        left, bottom = transformer.transform(bbox[0], bbox[1])\n",
+    "        right, top = transformer.transform(bbox[2], bbox[3])\n",
+    "        \n",
+    "        row_start, col_start = src.index(left, top)\n",
+    "        row_stop, col_stop = src.index(right, bottom)\n",
+    "        \n",
+    "        window = rasterio.windows.Window.from_slices(\n",
+    "            (row_start, row_stop),\n",
+    "            (col_start, col_stop)\n",
+    "        )\n",
+    "        \n",
+    "        pixels = src.read(1, window=window)\n",
+    "        transform = src.window_transform(window)\n",
+    "        \n",
+    "        return pixels, transform\n",
+    "\n",
+    "print(\"✅ Helper function created: windowed_read()\")"
+   ]
+  },
+  {
+   "cell_type": "markdown",
+   "metadata": {},
+   "source": [
+    "### 📥 Step 7: Read Red and NIR Raster Windows\n",
+    "\n",
+    "Now let's read only the pixels inside our area of interest."
+   ]
+  },
+  {
+   "cell_type": "code",
+   "execution_count": null,
+   "metadata": {},
+   "outputs": [],
+   "source": [
+    "red_url = item.assets[\"B04\"].href\n",
+    "nir_url = item.assets[\"B08\"].href\n",
+    "rgb_url = item.assets[\"visual\"].href\n",
+    "\n",
+    "red_pixels, transform_window = windowed_read(red_url, bbox)\n",
+    "nir_pixels, _ = windowed_read(nir_url, bbox)\n",
+    "\n",
+    "print(f\"✅ Red shape: {red_pixels.shape}\")\n",
+    "print(f\"✅ NIR shape: {nir_pixels.shape}\")\n",
+    "print(f\"✅ Window transform: {transform_window}\")"
+   ]
+  },
+  {
+   "cell_type": "markdown",
+   "metadata": {},
+   "source": [
+    "### 🌿 Step 8: Calculate NDVI\n",
+    "\n",
+    "NDVI is calculated as `(NIR - Red) / (NIR + Red)`."
+   ]
+  },
+  {
+   "cell_type": "code",
+   "execution_count": null,
+   "metadata": {},
+   "outputs": [],
+   "source": [
+    "ndvi = (nir_pixels.astype(float) - red_pixels.astype(float)) / (\n",
+    "    nir_pixels.astype(float) + red_pixels.astype(float)\n",
+    ")\n",
+    "\n",
+    "print(f\"✅ NDVI shape: {ndvi.shape}\")\n",
+    "print(f\"✅ NDVI min: {ndvi.min():.3f}\")\n",
+    "print(f\"✅ NDVI max: {ndvi.max():.3f}\")\n",
+    "print(f\"✅ NDVI mean: {ndvi.mean():.3f}\")"
+   ]
+  },
+  {
+   "cell_type": "markdown",
+   "metadata": {},
+   "source": [
+    "### 🖼️ Step 9: Visualize RGB and NDVI\n",
+    "\n",
+    "Let's compare the true-color imagery and the NDVI result."
+   ]
+  },
+  {
+   "cell_type": "code",
+   "execution_count": null,
+   "metadata": {},
+   "outputs": [],
+   "source": [
+    "signed_rgb_url = planetary_computer.sign(rgb_url)\n",
+    "\n",
+    "with rasterio.open(signed_rgb_url) as src:\n",
+    "    transformer = Transformer.from_crs(\"EPSG:4326\", src.crs, always_xy=True)\n",
+    "    left, bottom = transformer.transform(bbox[0], bbox[1])\n",
+    "    right, top = transformer.transform(bbox[2], bbox[3])\n",
+    "    row_start, col_start = src.index(left, top)\n",
+    "    row_stop, col_stop = src.index(right, bottom)\n",
+    "    window = rasterio.windows.Window.from_slices(\n",
+    "        (row_start, row_stop),\n",
+    "        (col_start, col_stop)\n",
+    "    )\n",
+    "    rgb_pixels = src.read([1, 2, 3], window=window)\n",
+    "\n",
+    "fig, (ax1, ax2) = plt.subplots(1, 2, figsize=(14, 6))\n",
+    "\n",
+    "show(rgb_pixels, transform=transform_window, ax=ax1)\n",
+    "ax1.set_title(\"RGB Subset\")\n",
+    "\n",
+    "im = ax2.imshow(ndvi, cmap=\"RdYlGn\", vmin=-1, vmax=1)\n",
+    "ax2.set_title(\"NDVI\")\n",
+    "ax2.axis(\"off\")\n",
+    "plt.colorbar(im, ax=ax2, shrink=0.8)\n",
+    "\n",
+    "plt.tight_layout()\n",
+    "plt.show()"
+   ]
+  },
+  {
+   "cell_type": "markdown",
+   "metadata": {},
+   "source": [
+    "### ✂️ Step 10: Build a Helper Function to Mask NDVI by Polygon\n",
+    "\n",
+    "**💡 This helper function will also be useful in `src/rasterio_basics.py`!**"
+   ]
+  },
+  {
+   "cell_type": "code",
+   "execution_count": null,
+   "metadata": {},
+   "outputs": [],
+   "source": [
+    "def mask_ndvi_by_field(image, field_geom):\n",
+    "    \"\"\"\n",
+    "    Mask NDVI values to a polygon.\n",
+    "    \"\"\"\n",
+    "    mask = features.geometry_mask(\n",
+    "        [field_geom],\n",
+    "        out_shape=(image['ndvi'].shape[0], image['ndvi'].shape[1]),\n",
+    "        transform=image['transform_window'],\n",
+    "        all_touched=False,\n",
+    "        invert=False\n",
+    "    )\n",
+    "    return ma.masked_array(image['ndvi'], mask)\n",
+    "\n",
+    "print(\"✅ Helper function created: mask_ndvi_by_field()\")"
+   ]
+  },
+  {
+   "cell_type": "markdown",
+   "metadata": {},
+   "source": [
+    "### 🗺️ Step 11: Load Polygon Data and Overlay on Imagery\n",
+    "\n",
+    "Let's load polygon features and see where they fall on the raster imagery."
+   ]
+  },
+  {
+   "cell_type": "code",
+   "execution_count": null,
+   "metadata": {},
+   "outputs": [],
+   "source": [
+    "fields = gpd.read_file('neighborhood_samples.geojson').to_crs(epsg=32612)\n",
+    "\n",
+    "fig, ax = plt.subplots(1, figsize=(10, 10))\n",
+    "show(rgb_pixels, transform=transform_window, ax=ax, alpha=0.75)\n",
+    "fields.boundary.plot(ax=ax, color='skyblue', linewidth=3)\n",
+    "ax.set_title(\"Polygons over Imagery\")\n",
+    "plt.tight_layout()\n",
+    "plt.show()\n",
+    "\n",
+    "print(f\"✅ Loaded {len(fields)} polygons\")"
+   ]
+  },
+  {
+   "cell_type": "markdown",
+   "metadata": {},
+   "source": [
+    "### 🌿 Step 12: Mask NDVI Inside One Polygon\n",
+    "\n",
+    "Let's test masking with one field first."
+   ]
+  },
+  {
+   "cell_type": "code",
+   "execution_count": null,
+   "metadata": {},
+   "outputs": [],
+   "source": [
+    "image = {\n",
+    "    'date': item.datetime.strftime('%Y-%m-%d'),\n",
+    "    'rgb': rgb_pixels,\n",
+    "    'ndvi': ndvi,\n",
+    "    'transform_window': transform_window\n",
+    "}\n",
+    "\n",
+    "masked_ndvi = mask_ndvi_by_field(image, fields.iloc[0].geometry)\n",
+    "\n",
+    "fig, ax = plt.subplots(figsize=(10, 10))\n",
+    "show(image['rgb'], transform=image['transform_window'], ax=ax, alpha=0.5)\n",
+    "show(masked_ndvi, transform=image['transform_window'], ax=ax, cmap='RdYlGn', vmin=-1, vmax=1)\n",
+    "ax.set_title(f\"Masked NDVI ({image['date']})\")\n",
+    "plt.tight_layout()\n",
+    "plt.show()\n",
+    "\n",
+    "print(f\"✅ Mean NDVI inside polygon: {masked_ndvi.mean():.3f}\")"
+   ]
+  },
+  {
+   "cell_type": "markdown",
+   "metadata": {},
+   "source": [
+    "### 🔁 Step 13: Build a Scene Collection for a Longer Time Series\n",
+    "\n",
+    "Now let's repeat the workflow across a longer date range so we can analyze change through time."
+   ]
+  },
+  {
+   "cell_type": "code",
+   "execution_count": null,
+   "metadata": {},
+   "outputs": [],
+   "source": [
+    "long_date_range = \"2020-01-01/2021-12-31\"\n",
+    "long_items = image_search(bbox, long_date_range, 5)\n",
+    "\n",
+    "images = []\n",
+    "\n",
+    "for item in long_items:\n",
+    "    red_url = item.assets[\"B04\"].href\n",
+    "    nir_url = item.assets[\"B08\"].href\n",
+    "    visual_url = item.assets[\"visual\"].href\n",
+    "    \n",
+    "    red_pixels, transform = windowed_read(red_url, bbox)\n",
+    "    nir_pixels, _ = windowed_read(nir_url, bbox)\n",
+    "    \n",
+    "    ndvi = (nir_pixels.astype(float) - red_pixels.astype(float)) / (\n",
+    "        nir_pixels.astype(float) + red_pixels.astype(float)\n",
+    "    )\n",
+    "    \n",
+    "    signed_visual_url = planetary_computer.sign(visual_url)\n",
+    "    with rasterio.open(signed_visual_url) as src:\n",
+    "        transformer = Transformer.from_crs(\"EPSG:4326\", src.crs, always_xy=True)\n",
+    "        left, bottom = transformer.transform(bbox[0], bbox[1])\n",
+    "        right, top = transformer.transform(bbox[2], bbox[3])\n",
+    "        row_start, col_start = src.index(left, top)\n",
+    "        row_stop, col_stop = src.index(right, bottom)\n",
+    "        window = rasterio.windows.Window.from_slices(\n",
+    "            (row_start, row_stop),\n",
+    "            (col_start, col_stop)\n",
+    "        )\n",
+    "        rgb = src.read([1, 2, 3], window=window)\n",
+    "    \n",
+    "    images.append({\n",
+    "        'date': item.datetime.strftime('%Y-%m-%d'),\n",
+    "        'rgb': rgb,\n",
+    "        'ndvi': ndvi,\n",
+    "        'transform_window': transform\n",
+    "    })\n",
+    "\n",
+    "print(f\"✅ Built collection with {len(images)} scenes\")"
+   ]
+  },
+  {
+   "cell_type": "markdown",
+   "metadata": {},
+   "source": [
+    "### 📊 Step 14: Build and Plot an NDVI Time Series\n",
+    "\n",
+    "Let's calculate the mean NDVI inside each polygon through time and plot the results."
+   ]
+  },
+  {
+   "cell_type": "code",
+   "execution_count": null,
+   "metadata": {},
+   "outputs": [],
+   "source": [
+    "for image in images:\n",
+    "    ndvi_fields = {}\n",
+    "    for index, row in fields.iterrows():\n",
+    "        ndvi_fields[row.area] = mask_ndvi_by_field(image, row.geometry)\n",
+    "    image['ndvi_fields'] = ndvi_fields\n",
+    "\n",
+    "time_series_data = {}\n",
+    "\n",
+    "for field_id in fields['area']:\n",
+    "    dates = []\n",
+    "    ndvi_values = []\n",
+    "    \n",
+    "    for image in images:\n",
+    "        dates.append(image['date'])\n",
+    "        ndvi_values.append(image['ndvi_fields'][field_id].mean())\n",
+    "    \n",
+    "    time_series_data[field_id] = {\n",
+    "        'dates': dates,\n",
+    "        'ndvi': ndvi_values,\n",
+    "        'dates_dt': [datetime.strptime(d, '%Y-%m-%d') for d in dates]\n",
+    "    }\n",
+    "\n",
+    "fig, ax = plt.subplots(figsize=(14, 8))\n",
+    "\n",
+    "for field_id, data in time_series_data.items():\n",
+    "    ax.plot(\n",
+    "        data['dates_dt'],\n",
+    "        data['ndvi'],\n",
+    "        marker='o',\n",
+    "        linewidth=2,\n",
+    "        markersize=4,\n",
+    "        label=field_id\n",
+    "    )\n",
+    "\n",
+    "ax.set_xlabel('Date')\n",
+    "ax.set_ylabel('Mean NDVI')\n",
+    "ax.set_title('NDVI Time Series by Field', fontweight='bold')\n",
+    "ax.legend()\n",
+    "ax.grid(True, alpha=0.3)\n",
+    "ax.xaxis.set_major_formatter(mdates.DateFormatter('%Y-%m'))\n",
+    "ax.xaxis.set_major_locator(mdates.MonthLocator(interval=3))\n",
+    "plt.xticks(rotation=45)\n",
+    "\n",
+    "plt.tight_layout()\n",
+    "plt.show()"
+   ]
+  },
+  {
+   "cell_type": "markdown",
+   "metadata": {},
+   "source": [
+    "### ✨ Step 15: Test the Helper Functions and Workflow\n",
+    "\n",
+    "Let's do a few quick checks to make sure the key parts of the workflow are working."
+   ]
+  },
+  {
+   "cell_type": "code",
+   "execution_count": null,
+   "metadata": {},
+   "outputs": [],
+   "source": [
+    "# Test 1: STAC search\n",
+    "print(\"Test 1: STAC search\")\n",
+    "test_items = image_search(bbox, date_range, 5)\n",
+    "print(f\"✅ Returned {len(test_items)} items\")\n",
+    "print()\n",
+    "\n",
+    "# Test 2: Windowed read\n",
+    "print(\"Test 2: Windowed read\")\n",
+    "test_pixels, test_transform = windowed_read(test_items[0].assets['B04'].href, bbox)\n",
+    "print(f\"✅ Pixel shape: {test_pixels.shape}\")\n",
+    "print(f\"✅ Transform returned: {test_transform}\")\n",
+    "print()\n",
+    "\n",
+    "# Test 3: Mask NDVI\n",
+    "print(\"Test 3: Mask NDVI\")\n",
+    "test_masked = mask_ndvi_by_field(image, fields.iloc[0].geometry)\n",
+    "print(f\"✅ Masked array type: {type(test_masked)}\")\n",
+    "print(f\"✅ Mean NDVI: {test_masked.mean():.3f}\")\n",
+    "print()\n",
+    "\n",
+    "print(\"🎉 Workflow checks completed!\")"
+   ]
+  },
+  {
+   "cell_type": "markdown",
+   "metadata": {},
+   "source": [
+    "### 🔑 Key Learning Points\n",
+    "\n",
+    "- **STAC** helps discover satellite imagery using metadata and scene assets\n",
+    "- **Cloud-Optimized GeoTIFFs (COGs)** allow efficient windowed raster reads\n",
+    "- **Raster transforms** connect pixel coordinates to geographic space\n",
+    "- **NDVI** is calculated from red and near-infrared bands\n",
+    "- **Raster masks** isolate values inside vector polygons\n",
+    "- A simple **time series** can summarize vegetation change through time\n",
+    "- Helper functions are useful when a workflow repeats the same steps"
+   ]
+  }
+ ],
+ "metadata": {
+  "kernelspec": {
+   "display_name": "Python 3",
+   "language": "python",
+   "name": "python3"
+  },
+  "language_info": {
+   "name": "python",
+   "version": "3.11.0"
+  }
+ },
+ "nbformat": 4,
+ "nbformat_minor": 4
+}
