@@ -22,7 +22,7 @@ import os
 # =============================================================================
 
 def load_and_explore_gis_data(file_path):
-   """
+    """
     Load a CSV file and display comprehensive information about the dataset.
     
     This function demonstrates the first step in any data analysis project:
@@ -193,7 +193,7 @@ def calculate_station_statistics(df):
 # =============================================================================
 
 def join_station_data(stations_df, readings_df):
-   """
+    """
     Join sensor readings with station metadata
     
     This function joins station information (name, location) with temperature readings.
